@@ -1,0 +1,218 @@
+-- Setup.
+.headers on
+.separator ','
+
+DROP TABLE IF EXISTS sets;
+DROP TABLE IF EXISTS themes;
+DROP TABLE IF EXISTS parts;
+DROP VIEW IF EXISTS top_level_themes;
+DROP VIEW IF EXISTS sets_years;
+DROP TABLE IF EXISTS parts_fts;
+
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (a.i) Create tables
+
+create table sets (set_num TEXT, name TEXT, year INT, theme_id INT, num_parts INT);
+create table themes (id INT, name TEXT, parent_id INT);
+create table parts (part_num TEXT, name TEXT, part_cat_id INT, part_material_id INT);
+
+.tables
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (a.ii) Import data
+
+.mode csv 
+.import data/sets.csv sets 
+.import data/themes.csv themes 
+.import data/parts.csv parts
+
+.headers off
+SELECT COUNT(*) FROM sets;
+SELECT COUNT(*) FROM parts;
+.headers on
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (b) Create indexes
+
+CREATE INDEX sets_index ON sets (set_num);
+CREATE INDEX parts_index ON parts (part_num);
+CREATE INDEX themes_index ON themes (id);
+
+.indexes
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (c.i) Create the top_level themes VIEW
+
+CREATE VIEW top_level_themes AS 
+SELECT id, name 
+FROM themes 
+WHERE parent_id = '';
+
+.headers off
+PRAGMA table_info(top_level_themes);
+.headers on
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (c.ii) count the top level themes in the top_level_themes view.
+
+SELECT COUNT(*) AS count FROM top_level_themes;
+
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (d) Finding top level themes with the most sets.
+
+DROP VIEW IF EXISTS top_level_sets;
+
+CREATE VIEW top_level_sets AS 
+SELECT top_level_themes.name AS theme, sets.set_num AS set_num 
+FROM top_level_themes 
+INNER JOIN sets 
+ON top_level_themes.id = sets.theme_id;
+
+SELECT theme, COUNT(*) AS num_sets 
+FROM top_level_sets 
+GROUP BY theme 
+ORDER BY num_sets DESC 
+LIMIT 10;
+
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (e) Calculate a percentage
+
+DROP VIEW IF EXISTS top_level_sets_sum;
+DROP VIEW IF EXISTS top_level_sets_sum1;
+DROP VIEW IF EXISTS top_level_sets_sum2;
+
+CREATE VIEW top_level_sets_sum AS 
+SELECT theme, COUNT(*) AS num_sets 
+FROM top_level_sets 
+GROUP BY theme 
+ORDER BY num_sets DESC;
+
+CREATE TABLE top_level_sets_sum1 (theme TEXT, percentage REAL);
+INSERT INTO top_level_sets_sum1 SELECT * FROM top_level_sets_sum;
+
+CREATE VIEW top_level_sets_sum2 AS 
+SELECT theme, percentage*100/(SELECT SUM(percentage) FROM top_level_sets_sum1) AS percentage 
+FROM top_level_sets_sum1; 
+
+SELECT theme, printf("%.2f",percentage) AS percentage 
+FROM top_level_sets_sum2 
+WHERE percentage >= 5;
+
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (f) Summarize a sub-theme
+
+DROP VIEW IF EXISTS low_level_themes;
+DROP VIEW IF EXISTS sets_low_themes;
+
+CREATE VIEW low_level_themes AS 
+SELECT id, name, parent_id 
+FROM themes 
+WHERE parent_id != '';
+
+CREATE VIEW sets_low_themes AS 
+SELECT sets.set_num, low_level_themes.parent_id, low_level_themes.name AS sub_theme 
+FROM sets 
+INNER JOIN low_level_themes 
+ON sets.theme_id = low_level_themes.id;
+
+SELECT sub_theme, COUNT(set_num) AS num_sets 
+FROM sets_low_themes 
+WHERE parent_id = 186 
+GROUP BY sub_theme 
+ORDER BY num_sets DESC, sub_theme ASC;
+
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (g.i.) Create the sets VIEW
+
+CREATE VIEW sets_years AS 
+SELECT rowid AS ROWID, year, COUNT(set_num) AS sets_count 
+FROM sets 
+GROUP BY year;
+
+.headers off
+PRAGMA table_info(sets_years);
+SELECT AVG(sets_count) FROM sets_years;
+.headers on
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (g.ii) Find the running total of sets in the Rebrickable database each year
+
+SELECT a.year,
+       SUM(b.sets_count) AS running_total 
+FROM sets_years a 
+CROSS JOIN sets_years b 
+WHERE (b.year <= a.year) 
+GROUP BY a.year, a.sets_count 
+ORDER BY a.year, a.sets_count;
+
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (h) Create the FTS table and import data.
+
+CREATE VIRTUAL TABLE parts_fts USING fts4 (part_num TEXT, name TEXT, part_cat_id INT, part_material_id INT);
+
+.mode csv
+.import data/parts.csv parts_fts
+
+.headers off
+PRAGMA table_info(parts_fts);
+.headers on
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (h.i) Count the number of unique parts whose name field begins with the prefix ‘mini’.
+
+SELECT count(*) AS Count_overview 
+FROM parts_fts 
+WHERE name MATCH '^mini*';
+
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (h.ii) List the part_num’s of the unique parts that contain the terms ‘minidoll’ and ‘boy’ in the name field with no more than 5 intervening terms.
+
+SELECT part_num AS part_num_boy_minidoll 
+FROM parts_fts 
+WHERE name MATCH 'minidoll NEAR/5 boy';
+
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
+
+-- (h.iii) List the part_num’s of the unique parts that contain the terms ‘minidoll’ and ‘girl’ in the name field with no more than 5 intervening terms.
+
+SELECT part_num AS part_num_girl_minidoll 
+FROM parts_fts 
+WHERE name MATCH 'minidoll NEAR/5 girl';
+
+.print '~~~~~'
+
+-- ***** ***** ***** ***** ***** ***** ***** ***** ***** ***** --
